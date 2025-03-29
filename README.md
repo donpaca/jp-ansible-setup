@@ -35,6 +35,7 @@ ansible-playbook -i inventory.ini setup-app.yml
 
 Kurulumun nasıl yapıldığını, neden Ansible tercih ettiğimizi ve tüm süreci detaylı anlattığım makaleye aşağıdan ulaşabilirsiniz:
 
+https://www.linkedin.com/pulse/ansible-ile-otomatik-sunucu-kurulumu-tomcat-zulu-jdk-ve-k%C4%B1l%C4%B1%C3%A7arslan-okfvf
 
 📌 **Gereksinimler**
 	•	Rocky Linux 9.x
