@@ -1,0 +1,156 @@
+---
+- name: Uygulama Sunucusu Kurulumu
+  hosts: appservers
+  become: yes
+
+  tasks:
+
+    # Zulu JDK arşivini indiriyoruz (en güncel sürüm)
+    - name: Zulu JDK 8.84.0.15 arşivini indir
+      get_url:
+        url: "https://cdn.azul.com/zulu/bin/zulu8.84.0.15-ca-fx-jdk8.0.442-linux_x64.tar.gz"
+        dest: /tmp/zulu8.tar.gz
+        mode: '0644'
+
+    # JVM dizinini oluşturuyoruz
+    - name: /usr/lib/jvm dizinini oluştur
+      file:
+        path: /usr/lib/jvm
+        state: directory
+        mode: '0755'
+
+    # İndirdiğimiz Zulu JDK arşivini çıkarıyoruz
+    - name: Zulu JDK'yi arşivden çıkar
+      unarchive:
+        src: /tmp/zulu8.tar.gz
+        dest: /usr/lib/jvm
+        remote_src: yes
+
+    # JAVA_HOME değişkenini tanımlayan bir profil dosyası oluşturuyoruz
+    - name: JAVA_HOME ayar dosyasını oluştur
+      copy:
+        dest: /etc/profile.d/java.sh
+        content: |
+          export JAVA_HOME=/usr/lib/jvm/zulu8.84.0.15-ca-fx-jdk8.0.442-linux_x64
+          export PATH=$JAVA_HOME/bin:$PATH
+        mode: '0755'
+
+    # Oturum açıldığında JAVA_HOME otomatik yüklensin diye .bashrc'ye source ekliyoruz
+    - name: root kullanıcısının .bashrc dosyasına otomatik source ekle
+      lineinfile:
+        path: /root/.bashrc
+        line: "source /etc/profile.d/java.sh"
+        create: yes
+        state: present
+
+    # Tomcat 9.0.102 sürümünü indiriyoruz
+    - name: Tomcat 9.0.102 arşivini indir
+      get_url:
+        url: "https://dlcdn.apache.org/tomcat/tomcat-9/v9.0.102/bin/apache-tomcat-9.0.102.tar.gz"
+        dest: /tmp/tomcat.tar.gz
+        mode: '0644'
+
+    # Tomcat dizin yapısını oluşturuyoruz
+    - name: /opt/tomcat dizinini oluştur
+      file:
+        path: /opt/tomcat
+        state: directory
+        mode: '0755'
+
+    # Tomcat arşivini /opt/tomcat dizinine çıkarıyoruz
+    - name: Tomcat arşivini çıkar
+      unarchive:
+        src: /tmp/tomcat.tar.gz
+        dest: /opt/tomcat
+        remote_src: yes
+        extra_opts:
+          - --strip-components=1
+
+    # Tomcat yöneticisi için multipart-config ayarlarını güncelliyoruz (upload sınırlarını artırmak için)
+    - name: multipart-config bloğunu sed ile değiştir
+      shell: |
+        sed -i '/<servlet-name>HTMLManager<\/servlet-name>/,/<\/servlet>/ {
+          /<multipart-config>/,/<\/multipart-config>/c\
+          <multipart-config>\n\
+            <max-file-size>2147483648</max-file-size>\n\
+            <max-request-size>2147483648</max-request-size>\n\
+            <file-size-threshold>0</file-size-threshold>\n\
+          </multipart-config>
+        }' /opt/tomcat/webapps/manager/WEB-INF/web.xml
+
+    # Tomcat’i systemd üzerinden yönetebilmek için servis dosyası oluşturuyoruz
+    - name: Tomcat için systemd servis dosyasını oluştur
+      copy:
+        dest: /etc/systemd/system/tomcat.service
+        content: |
+          [Unit]
+          Description=Apache Tomcat Web Application Container
+          After=network.target
+
+          [Service]
+          Type=forking
+
+          Environment=JAVA_HOME=/usr/lib/jvm/zulu8.84.0.15-ca-fx-jdk8.0.442-linux_x64
+          Environment=CATALINA_PID=/opt/tomcat/temp/tomcat.pid
+          Environment=CATALINA_HOME=/opt/tomcat
+          Environment=CATALINA_BASE=/opt/tomcat
+          Environment='CATALINA_OPTS=-Xms1024m -Xmx2048m -server -XX:+UseParallelGC'
+          Environment='JAVA_OPTS=-Dorg.apache.catalina.security.SecurityListener.UMASK=0027 -Xms1024m -Xmx2048m'
+
+          # ulimit ayarları
+          LimitNOFILE=1048576
+          LimitNPROC=unlimited
+
+          ExecStart=/opt/tomcat/bin/startup.sh
+          ExecStop=/opt/tomcat/bin/shutdown.sh
+
+          User=root
+          Group=root
+          UMask=0007
+          RestartSec=10
+          Restart=always
+
+          [Install]
+          WantedBy=multi-user.target
+        mode: '0644'
+
+    # systemd konfigürasyonunu yeniden yüklüyoruz
+    - name: systemd servislerini yeniden yükle
+      shell: systemctl daemon-reexec && systemctl daemon-reload
+
+    # Tomcat servisini başlatıyoruz
+    - name: Tomcat servisini başlat
+      systemd:
+        name: tomcat
+        enabled: yes
+        state: started
+
+    # J-Platform EAR dosyasını indiriyoruz
+    - name: JPlatform EAR dosyasını indir
+      get_url:
+        url: "https://download.logo.com.tr:/Java/JPlatform%20-%20J-HR/JPlatform_Versions/LTS1.2025%203.30/jplatform_202503281710_v3.30.6.5_protected.ear"
+        dest: /tmp/jplatform.ear
+        mode: '0644'
+        force: yes
+
+    # EAR dosyasını çıkarıyoruz, içinden logo.war alınacak
+    - name: EAR dosyasını çıkar (jar komutu ile)
+      shell: |
+        mkdir -p /tmp/jplatform_extracted
+        cd /tmp/jplatform_extracted
+        jar -xvf /tmp/jplatform.ear
+      args:
+        executable: /bin/bash
+
+    # logo.war dosyasını Tomcat’in webapps dizinine kopyalıyoruz
+    - name: logo.war dosyasını Tomcat'in webapps dizinine kopyala
+      copy:
+        src: /tmp/jplatform_extracted/logo.war
+        dest: /opt/tomcat/webapps/logo.war
+        mode: '0644'
+
+    # logo.war deploy edildikten sonra Tomcat’i yeniden başlatıyoruz
+    - name: Tomcat servisini yeniden başlat
+      systemd:
+        name: tomcat
+        state: restarted
